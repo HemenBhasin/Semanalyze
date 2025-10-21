@@ -11,6 +11,6 @@ spacy==3.6.1
 wordcloud==1.9.3
 matplotlib==3.7.1
 seaborn==0.12.2
-torch==2.0.1+cpu -f https://download.pytorch.org/whl/torch_stable.html
-torchvision==0.15.2+cpu -f https://download.pytorch.org/whl/torch_stable.html
-torchaudio==2.0.2 -f https://download.pytorch.org/whl/torch_stable.html
+torch==1.13.1
+torchvision==0.14.1
+torchaudio==0.13.1
