@@ -69,14 +69,23 @@ if [ -f "requirements.txt" ]; then
     install_with_retry pip install -r requirements.txt --progress-bar off
 fi
 
-# Install spaCy model directly using pip
-echo "Installing spaCy model..."
-install_with_retry pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.6.0/en_core_web_sm-3.6.0.tar.gz
+# Install spaCy model using spacy download
+echo "Installing spaCy model using spacy download..."
+python -m spacy download en_core_web_sm --no-cache-dir
 
 # Verify the model can be loaded
 if ! python -c "import spacy; spacy.load('en_core_web_sm')" &>/dev/null; then
-    echo "Warning: Could not load spaCy model directly, but continuing..."
-    echo "The application will attempt to install it at runtime if needed."
+    echo "Warning: Could not load spaCy model, trying direct download..."
+    # Fallback: Download and install the model directly
+    wget -q https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.6.0/en_core_web_sm-3.6.0.tar.gz
+    pip install --no-cache-dir en_core_web_sm-3.6.0.tar.gz
+    rm en_core_web_sm-3.6.0.tar.gz
+    
+    # Verify again after direct install
+    if ! python -c "import spacy; spacy.load('en_core_web_sm')" &>/dev/null; then
+        echo "Warning: Could not load spaCy model, but continuing..."
+        echo "The application will attempt to use a fallback model at runtime."
+    fi
 fi
 
 # Download NLTK data

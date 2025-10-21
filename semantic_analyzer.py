@@ -63,7 +63,25 @@ class SemanticReviewAnalyzer:
         except OSError as e:
             self.logger.warning(f"Direct load failed: {str(e)}")
         
-        # Method 2: Try importing the model directly (works if it's installed but not in the right location)
+        # Method 2: Try downloading the model using spacy download
+        try:
+            self.logger.info(f"Attempting to download {model_name}...")
+            subprocess.run([
+                sys.executable, 
+                "-m", 
+                "spacy", 
+                "download", 
+                model_name
+            ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            # Try loading again
+            nlp = spacy.load(model_name)
+            self.logger.info(f"Successfully loaded {model_name} after download")
+            return nlp
+        except Exception as e:
+            self.logger.warning(f"Download failed: {str(e)}")
+            
+        # Method 3: Try importing the model directly
         try:
             module_name = model_name.replace('-', '_')
             self.logger.info(f"Attempting to import {module_name} directly...")
@@ -73,37 +91,20 @@ class SemanticReviewAnalyzer:
         except Exception as e:
             self.logger.warning(f"Direct import failed: {str(e)}")
         
-        # Method 3: Try installing the model package directly
+        # Method 4: As a last resort, use a blank English model
         try:
-            self.logger.info("Attempting to install model package directly...")
-            model_package = f"{model_name}==3.6.0"
-            subprocess.check_call([
-                sys.executable, 
-                "-m", 
-                "pip", 
-                "install",
-                model_package
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            # Try loading again
-            nlp = spacy.load(model_name)
-            self.logger.info(f"Successfully loaded {model_name} after direct package install")
-            return nlp
-            
-        except Exception as e:
-            self.logger.warning(f"Direct package install failed: {str(e)}")
-        
-        # Method 4: As a last resort, use a smaller model
-        try:
-            self.logger.warning("Falling back to small English model...")
-            nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
-            self.logger.info("Successfully loaded small English model")
+            self.logger.warning("Falling back to blank English model...")
+            nlp = spacy.blank('en')
+            # Add basic pipeline components that we know we'll need
+            if 'sentencizer' not in nlp.pipe_names:
+                nlp.add_pipe('sentencizer')
+            self.logger.info("Successfully loaded blank English model with sentencizer")
             return nlp
             
         except Exception as e:
             error_msg = f"All attempts to load spaCy models failed. Last error: {str(e)}"
             self.logger.error(error_msg)
-            self.logger.error("Tried: direct load, direct import, package install, and fallback model")
+            self.logger.error("Tried: direct load, download, direct import, and blank model")
             raise RuntimeError("Failed to load any spaCy model. The application cannot continue without NLP capabilities.")
         
     def _setup_logging(self):
