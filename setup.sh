@@ -69,11 +69,15 @@ if [ -f "requirements.txt" ]; then
     install_with_retry pip install -r requirements.txt --progress-bar off
 fi
 
-# Install spaCy model
-# The semantic_analyzer.py will handle model download if it's not found
-# But we'll try to install it here first to speed things up
+# Install spaCy model with --user flag to avoid permission issues
 echo "Installing spaCy model..."
-install_with_retry python -m spacy download en_core_web_sm --no-deps
+install_with_retry python -m spacy download en_core_web_sm --user --no-deps
+
+# Also try installing via pip with --user flag as a fallback
+if ! python -c "import spacy; spacy.load('en_core_web_sm')" &>/dev/null; then
+    echo "Direct load failed, trying pip install with --user..."
+    install_with_retry pip install --user https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.6.0/en_core_web_sm-3.6.0.tar.gz
+fi
 
 # Download NLTK data
 echo "Downloading NLTK data..."

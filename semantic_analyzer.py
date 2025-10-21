@@ -54,6 +54,12 @@ class SemanticReviewAnalyzer:
         model_name = 'en_core_web_sm'
         self.logger.info(f"Attempting to load spaCy model: {model_name}")
         
+        # Set user-writable directory for spaCy models
+        user_home = os.path.expanduser('~')
+        spacy_data_dir = os.path.join(user_home, 'spacy_models')
+        os.makedirs(spacy_data_dir, exist_ok=True)
+        os.environ['SPACY_DATA_DIR'] = spacy_data_dir
+        
         # Method 1: Try direct load first
         try:
             nlp = spacy.load(model_name)
@@ -62,29 +68,48 @@ class SemanticReviewAnalyzer:
         except OSError as e:
             self.logger.warning(f"Direct load failed: {str(e)}")
         
-        # Method 2: Try downloading via python -m spacy
+        # Method 2: Try downloading with --user flag
         try:
-            self.logger.info("Attempting to download model via spacy.cli...")
-            subprocess.check_call([sys.executable, "-m", "spacy", "download", model_name, "--no-deps"])
+            self.logger.info("Attempting to download model with --user flag...")
+            subprocess.check_call([
+                sys.executable, 
+                "-m", 
+                "spacy", 
+                "download", 
+                "--user",
+                model_name
+            ])
             nlp = spacy.load(model_name)
-            self.logger.info(f"Successfully loaded {model_name} after download")
+            self.logger.info(f"Successfully loaded {model_name} after user install")
             return nlp
         except Exception as e:
-            self.logger.warning(f"Download via spacy.cli failed: {str(e)}")
+            self.logger.warning(f"User install failed: {str(e)}")
         
-        # Method 3: Try installing via pip
+        # Method 3: Try installing to user directory
         try:
-            self.logger.info("Attempting to install model via pip...")
-            model_package = f"{model_name}==3.6.0"  # Match spaCy version
-            subprocess.check_call([sys.executable, "-m", "pip", "install", 
-                                 f"https://github.com/explosion/spacy-models/releases/download/{model_name}-3.6.0/{model_name}-3.6.0.tar.gz"])
+            self.logger.info("Attempting to install model to user directory...")
+            model_url = f"https://github.com/explosion/spacy-models/releases/download/{model_name}-3.6.0/{model_name}-3.6.0.tar.gz"
+            
+            # Install with --user flag
+            subprocess.check_call([
+                sys.executable, 
+                "-m", 
+                "pip", 
+                "install",
+                "--user",
+                model_url
+            ])
+            
+            # Try loading again
             nlp = spacy.load(model_name)
-            self.logger.info(f"Successfully loaded {model_name} after pip install")
+            self.logger.info(f"Successfully loaded {model_name} after user pip install")
             return nlp
+            
         except Exception as e:
-            error_msg = f"All attempts to load {model_name} failed: {str(e)}"
+            error_msg = f"All attempts to load {model_name} failed. Last error: {str(e)}"
             self.logger.error(error_msg)
-            raise RuntimeError(error_msg)
+            self.logger.error("Tried: direct load, spacy download --user, and pip install --user")
+            raise RuntimeError("Failed to load spaCy model. Please check the logs for details.")
         
     def _setup_logging(self):
         """Set up logging configuration."""
