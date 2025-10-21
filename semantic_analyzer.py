@@ -55,6 +55,14 @@ class SemanticReviewAnalyzer:
         model_name = 'en_core_web_sm'
         self.logger.info(f"Attempting to load spaCy model: {model_name}")
         
+        # First, try to load the model with only the necessary components
+        try:
+            nlp = spacy.load(model_name, disable=['parser', 'ner', 'textcat'])
+            self.logger.info(f"Successfully loaded {model_name} with minimal components")
+            return nlp
+        except Exception as e:
+            self.logger.warning(f"Failed to load with minimal components: {str(e)}")
+        
         # Method 1: Try direct load first
         try:
             nlp = spacy.load(model_name)
@@ -134,20 +142,41 @@ class SemanticReviewAnalyzer:
         
         return ' '.join(tokens)
     
-    def extract_aspects(self, text: str) -> List[str]:
-        """Extract product aspects from the review text."""
+    def extract_aspects(self, text):
+        """Extract aspects from the given text."""
+        if not text.strip():
+            return []
+            
         doc = self.nlp(text)
-        
-        # Extract noun chunks as potential aspects
         aspects = []
-        for chunk in doc.noun_chunks:
-            # Filter out non-relevant chunks
-            if len(chunk.text.split()) <= 3:  # Limit to 3-word phrases
-                aspects.append(chunk.text.lower())
         
-        # Remove duplicates while preserving order
-        seen = set()
-        return [x for x in aspects if not (x in seen or seen.add(x))]
+        try:
+            # Try using noun chunks if available (requires full model with parser)
+            if hasattr(doc, 'noun_chunks'):
+                for chunk in doc.noun_chunks:
+                    if len(chunk.text.split()) <= 3:  # Limit to 3-word phrases
+                        aspects.append(chunk.text.lower())
+            else:
+                # Fallback: extract nouns and noun phrases using POS tags
+                for token in doc:
+                    if token.pos_ in ['NOUN', 'PROPN'] and len(token.text) > 2:
+                        aspects.append(token.text.lower())
+                
+                # Add noun phrases (adj + noun)
+                for i in range(len(doc) - 1):
+                    if doc[i].pos_ in ['ADJ'] and doc[i+1].pos_ in ['NOUN', 'PROPN']:
+                        aspects.append(f"{doc[i].text.lower()} {doc[i+1].text.lower()}")
+        except Exception as e:
+            self.logger.warning(f"Error extracting aspects: {str(e)}")
+            # If all else fails, return the most common words as aspects
+            words = [token.text.lower() for token in doc if token.is_alpha and not token.is_stop]
+            word_freq = {}
+            for word in words:
+                word_freq[word] = word_freq.get(word, 0) + 1
+            aspects = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:5]
+            aspects = [word for word, _ in aspects]
+        
+        return list(set(aspects))  # Remove duplicates while preserving order
     
     def analyze_sentiment(self, text: str) -> Dict:
         """Analyze sentiment of the given text."""
