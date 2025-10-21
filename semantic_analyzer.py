@@ -50,15 +50,10 @@ class SemanticReviewAnalyzer:
         import subprocess
         import sys
         import os
+        import importlib
         
         model_name = 'en_core_web_sm'
         self.logger.info(f"Attempting to load spaCy model: {model_name}")
-        
-        # Set user-writable directory for spaCy models
-        user_home = os.path.expanduser('~')
-        spacy_data_dir = os.path.join(user_home, 'spacy_models')
-        os.makedirs(spacy_data_dir, exist_ok=True)
-        os.environ['SPACY_DATA_DIR'] = spacy_data_dir
         
         # Method 1: Try direct load first
         try:
@@ -68,48 +63,48 @@ class SemanticReviewAnalyzer:
         except OSError as e:
             self.logger.warning(f"Direct load failed: {str(e)}")
         
-        # Method 2: Try downloading with --user flag
+        # Method 2: Try importing the model directly (works if it's installed but not in the right location)
         try:
-            self.logger.info("Attempting to download model with --user flag...")
-            subprocess.check_call([
-                sys.executable, 
-                "-m", 
-                "spacy", 
-                "download", 
-                "--user",
-                model_name
-            ])
-            nlp = spacy.load(model_name)
-            self.logger.info(f"Successfully loaded {model_name} after user install")
+            module_name = model_name.replace('-', '_')
+            self.logger.info(f"Attempting to import {module_name} directly...")
+            nlp = importlib.import_module(module_name).load()
+            self.logger.info(f"Successfully loaded {model_name} via direct import")
             return nlp
         except Exception as e:
-            self.logger.warning(f"User install failed: {str(e)}")
+            self.logger.warning(f"Direct import failed: {str(e)}")
         
-        # Method 3: Try installing to user directory
+        # Method 3: Try installing the model package directly
         try:
-            self.logger.info("Attempting to install model to user directory...")
-            model_url = f"https://github.com/explosion/spacy-models/releases/download/{model_name}-3.6.0/{model_name}-3.6.0.tar.gz"
-            
-            # Install with --user flag
+            self.logger.info("Attempting to install model package directly...")
+            model_package = f"{model_name}==3.6.0"
             subprocess.check_call([
                 sys.executable, 
                 "-m", 
                 "pip", 
                 "install",
-                "--user",
-                model_url
-            ])
+                model_package
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
             # Try loading again
             nlp = spacy.load(model_name)
-            self.logger.info(f"Successfully loaded {model_name} after user pip install")
+            self.logger.info(f"Successfully loaded {model_name} after direct package install")
             return nlp
             
         except Exception as e:
-            error_msg = f"All attempts to load {model_name} failed. Last error: {str(e)}"
+            self.logger.warning(f"Direct package install failed: {str(e)}")
+        
+        # Method 4: As a last resort, use a smaller model
+        try:
+            self.logger.warning("Falling back to small English model...")
+            nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+            self.logger.info("Successfully loaded small English model")
+            return nlp
+            
+        except Exception as e:
+            error_msg = f"All attempts to load spaCy models failed. Last error: {str(e)}"
             self.logger.error(error_msg)
-            self.logger.error("Tried: direct load, spacy download --user, and pip install --user")
-            raise RuntimeError("Failed to load spaCy model. Please check the logs for details.")
+            self.logger.error("Tried: direct load, direct import, package install, and fallback model")
+            raise RuntimeError("Failed to load any spaCy model. The application cannot continue without NLP capabilities.")
         
     def _setup_logging(self):
         """Set up logging configuration."""

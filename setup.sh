@@ -69,14 +69,14 @@ if [ -f "requirements.txt" ]; then
     install_with_retry pip install -r requirements.txt --progress-bar off
 fi
 
-# Install spaCy model with --user flag to avoid permission issues
+# Install spaCy model directly using pip
 echo "Installing spaCy model..."
-install_with_retry python -m spacy download en_core_web_sm --user --no-deps
+install_with_retry pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.6.0/en_core_web_sm-3.6.0.tar.gz
 
-# Also try installing via pip with --user flag as a fallback
+# Verify the model can be loaded
 if ! python -c "import spacy; spacy.load('en_core_web_sm')" &>/dev/null; then
-    echo "Direct load failed, trying pip install with --user..."
-    install_with_retry pip install --user https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.6.0/en_core_web_sm-3.6.0.tar.gz
+    echo "Warning: Could not load spaCy model directly, but continuing..."
+    echo "The application will attempt to install it at runtime if needed."
 fi
 
 # Download NLTK data
