@@ -57,9 +57,9 @@ install_with_retry pip install "numpy>=1.24.0,<2.0.0" --progress-bar off
 # Install PyTorch with CPU-only version
 echo "Installing PyTorch..."
 install_with_retry pip install --no-cache-dir \
-    torch>=2.1.0,<2.2.0 \
-    torchvision>=0.16.0,<0.17.0 \
-    torchaudio>=2.1.0,<2.2.0 \
+    torch==2.1.2+cpu \
+    torchvision==0.16.2+cpu \
+    torchaudio==2.1.2+cpu \
     --index-url https://download.pytorch.org/whl/cpu \
     --progress-bar off
 
