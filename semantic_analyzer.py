@@ -40,7 +40,51 @@ class SemanticReviewAnalyzer:
         # Initialize NLP components
         self.stop_words = set(stopwords.words('english'))
         self.lemmatizer = WordNetLemmatizer()
-        self.nlp = spacy.load('en_core_web_sm')
+        
+        # Load spaCy model with multiple fallback methods
+        self.nlp = self._load_spacy_model()
+    
+    def _load_spacy_model(self):
+        """Load spaCy model with multiple fallback methods."""
+        import spacy
+        import subprocess
+        import sys
+        import os
+        
+        model_name = 'en_core_web_sm'
+        self.logger.info(f"Attempting to load spaCy model: {model_name}")
+        
+        # Method 1: Try direct load first
+        try:
+            nlp = spacy.load(model_name)
+            self.logger.info(f"Successfully loaded {model_name} via direct load")
+            return nlp
+        except OSError as e:
+            self.logger.warning(f"Direct load failed: {str(e)}")
+        
+        # Method 2: Try downloading via python -m spacy
+        try:
+            self.logger.info("Attempting to download model via spacy.cli...")
+            subprocess.check_call([sys.executable, "-m", "spacy", "download", model_name, "--no-deps"])
+            nlp = spacy.load(model_name)
+            self.logger.info(f"Successfully loaded {model_name} after download")
+            return nlp
+        except Exception as e:
+            self.logger.warning(f"Download via spacy.cli failed: {str(e)}")
+        
+        # Method 3: Try installing via pip
+        try:
+            self.logger.info("Attempting to install model via pip...")
+            model_package = f"{model_name}==3.6.0"  # Match spaCy version
+            subprocess.check_call([sys.executable, "-m", "pip", "install", 
+                                 f"https://github.com/explosion/spacy-models/releases/download/{model_name}-3.6.0/{model_name}-3.6.0.tar.gz"])
+            nlp = spacy.load(model_name)
+            self.logger.info(f"Successfully loaded {model_name} after pip install")
+            return nlp
+        except Exception as e:
+            error_msg = f"All attempts to load {model_name} failed: {str(e)}"
+            self.logger.error(error_msg)
+            raise RuntimeError(error_msg)
         
     def _setup_logging(self):
         """Set up logging configuration."""

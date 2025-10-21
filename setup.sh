@@ -63,19 +63,21 @@ install_with_retry pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cpu \
     --progress-bar off
 
-# Install other requirements
+# Install other requirements first
 if [ -f "requirements.txt" ]; then
     echo "Installing Python requirements..."
     install_with_retry pip install -r requirements.txt --progress-bar off
 fi
 
+# Install spaCy model
+# The semantic_analyzer.py will handle model download if it's not found
+# But we'll try to install it here first to speed things up
+echo "Installing spaCy model..."
+install_with_retry python -m spacy download en_core_web_sm --no-deps
+
 # Download NLTK data
 echo "Downloading NLTK data..."
 install_with_retry python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords'); nltk.download('wordnet')"
-
-# Download spaCy model
-echo "Downloading spaCy model..."
-install_with_retry python -m spacy download en_core_web_sm
 
 # Verify installations
 echo -e "\n=== Installed Packages ==="
