@@ -23,17 +23,29 @@ nltk.download('wordnet')
 class SemanticReviewAnalyzer:
     def __init__(self, model_name: str = "distilbert-base-uncased-finetuned-sst-2-english"):
         """Initialize the semantic analyzer with a pre-trained sentiment model."""
-        # Load spaCy with all components for better aspect extraction
-        self.nlp = spacy.load("en_core_web_sm")
+        try:
+            # Try to load the spaCy model
+            self.nlp = spacy.load("en_core_web_sm")
+        except OSError:
+            # If model not found, download it
+            import subprocess
+            import sys
+            subprocess.check_call([sys.executable, "-m", "spacy", "download", "en_core_web_sm"])
+            self.nlp = spacy.load("en_core_web_sm")
         
         # Initialize the sentiment analyzer pipeline with batching
-        self.sentiment_analyzer = pipeline(
-            "sentiment-analysis", 
-            model=model_name,
-            device=0 if torch.cuda.is_available() else -1,  # Use GPU if available
-            truncation=True,
-            batch_size=8  # Process multiple clauses in parallel
-        )
+        device = 0 if torch.cuda.is_available() else -1  # Use GPU if available
+        try:
+            self.sentiment_analyzer = pipeline(
+                "sentiment-analysis", 
+                model=model_name,
+                device=device,
+                truncation=True,
+                batch_size=8  # Process multiple clauses in parallel
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to initialize sentiment analyzer: {str(e)}")
+            raise
         
         # Initialize the Matcher for aspect extraction
         self.matcher = Matcher(self.nlp.vocab)

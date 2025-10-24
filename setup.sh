@@ -12,6 +12,9 @@ uname -a
 python --version
 pip --version
 
+# Ensure pip is up to date
+pip install --upgrade pip
+
 # Function to install with retries
 install_with_retry() {
     local max_attempts=3
@@ -65,13 +68,17 @@ install_with_retry pip install --no-cache-dir \
 
 # Install other requirements first
 if [ -f "requirements.txt" ]; then
-    echo "Installing Python requirements..."
-    install_with_retry pip install -r requirements.txt --progress-bar off
-fi
+    echo "Installing Python packages..."
+    install_with_retry pip install -r requirements.txt
 
-# Install spaCy model using spacy download
-echo "Installing spaCy model using spacy download..."
-python -m spacy download en_core_web_sm --no-cache-dir
+    # Install spaCy model
+    echo "Installing spaCy model..."
+    python -m spacy download en_core_web_sm
+
+    # Download NLTK data
+    echo "Downloading NLTK data..."
+    python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords'); nltk.download('wordnet')" --progress-bar off
+fi
 
 # Verify the model can be loaded
 if ! python -c "import spacy; spacy.load('en_core_web_sm')" &>/dev/null; then
