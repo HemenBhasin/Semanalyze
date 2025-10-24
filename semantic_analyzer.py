@@ -250,38 +250,396 @@ class SemanticReviewAnalyzer:
         
         return final_aspects
     
+    def _split_at_contrast_markers(self, text: str) -> list[tuple[str, bool]]:
+        """Split text at contrast markers and return chunks with their sentiment influence."""
+        # Define contrast markers and their impact on following text
+        contrast_markers = {
+            'but': True, 'however': True, 'although': False, 'though': False,
+            'yet': True, 'except': True, 'despite': False, 'whereas': True,
+            'while': True, 'nevertheless': True, 'nonetheless': True,
+            'on the other hand': True, 'in contrast': True, 'conversely': True,
+            'that said': True, 'having said that': True, 'then again': True
+        }
+        
+        # Convert to lowercase for case-insensitive matching
+        lower_text = text.lower()
+        chunks = []
+        last_pos = 0
+        
+        # Find all contrast markers and their positions
+        markers = []
+        for marker in sorted(contrast_markers.keys(), key=len, reverse=True):
+            pos = 0
+            while True:
+                pos = lower_text.find(marker, pos)
+                if pos == -1:
+                    break
+                # Check if it's a whole word
+                if (pos == 0 or not lower_text[pos-1].isalnum()) and \
+                   (pos + len(marker) >= len(lower_text) or not lower_text[pos + len(marker)].isalnum()):
+                    markers.append((pos, marker, contrast_markers[marker]))
+                pos += len(marker)
+        
+        # Sort markers by position
+        markers.sort()
+        
+        # Split text at markers
+        for pos, marker, is_strong in markers:
+            if pos > last_pos:
+                chunk = text[last_pos:pos].strip()
+                if chunk:
+                    chunks.append((chunk, False))  # Text before marker
+            
+            # Add the marker itself
+            chunks.append((text[pos:pos+len(marker)], is_strong))
+            last_pos = pos + len(marker)
+        
+        # Add remaining text
+        if last_pos < len(text):
+            chunk = text[last_pos:].strip()
+            if chunk:
+                chunks.append((chunk, False))
+        
+        # If no chunks were created, return the whole text
+        if not chunks:
+            return [(text, False)]
+            
+        return chunks
+
+    def _analyze_sentence_sentiment(self, text: str) -> tuple[float, str]:
+        """Analyze sentiment of a single sentence and return score and label."""
+        try:
+            # Skip very short texts that might be just punctuation or stopwords
+            if len(text.split()) <= 2 and not any(c.isalpha() for c in text):
+                return 0.5, 'neutral'
+                
+            result = self.sentiment_analyzer(text)[0]
+            score = result['score'] if result['label'] == 'POSITIVE' else 1 - result['score']
+            return score, result['label'].lower()
+        except Exception as e:
+            self.logger.warning(f"Error analyzing sentence '{text}': {str(e)}")
+            return 0.5, 'neutral'
+
+    def _detect_sentiment_shift(self, doc) -> tuple[list, float, float]:
+        """
+        Detect sentiment shift within a document.
+        
+        Returns:
+            tuple: (sentiment_changes, avg_shift, shift_ratio)
+                - sentiment_changes: List of (sentence, score, label, shift_from_previous)
+                - avg_shift: Average magnitude of sentiment shifts
+                - shift_ratio: Ratio of sentences with significant shifts
+        """
+        if len(doc) < 2:
+            return [("", 0.5, 'neutral', 0.0)], 0.0, 0.0
+            
+        sentences = [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 0]
+        if not sentences:
+            return [("", 0.5, 'neutral', 0.0)], 0.0, 0.0
+            
+        # Analyze each sentence
+        sentiment_data = []
+        prev_score = None
+        shift_magnitude = 0.0
+        shift_count = 0
+        
+        for i, sent in enumerate(sentences):
+            score, label = self._analyze_sentence_sentiment(sent)
+            shift = abs(score - prev_score) if prev_score is not None else 0.0
+            
+            # Check for significant shift
+            if prev_score is not None and shift > 0.3:  # Threshold for significant shift
+                shift_magnitude += shift
+                shift_count += 1
+                
+            sentiment_data.append((sent, score, label, shift))
+            prev_score = score
+        
+        # Calculate metrics
+        avg_shift = (shift_magnitude / shift_count) if shift_count > 0 else 0.0
+        shift_ratio = shift_count / (len(sentences) - 1) if len(sentences) > 1 else 0.0
+        
+        return sentiment_data, avg_shift, shift_ratio
+
+    def _summarize_sentiment_chunks(self, chunks: list[tuple[str, bool]]) -> tuple[float, list]:
+        """
+        Analyze and summarize sentiment across text chunks.
+        
+        Args:
+            chunks: List of (text, is_after_contrast) tuples
+            
+        Returns:
+            tuple: (final_score, analysis_results)
+                - final_score: Combined sentiment score (0-1)
+                - analysis_results: List of (text, score, label, weight)
+        """
+        if not chunks:
+            return 0.5, []
+            
+        results = []
+        total_weight = 0
+        weighted_sum = 0
+        
+        # First pass: analyze all chunks
+        for i, (chunk, is_contrast) in enumerate(chunks):
+            # Skip very short chunks that are just contrast markers
+            if len(chunk.split()) <= 2 and not any(c.isalpha() for c in chunk):
+                continue
+                
+            # Analyze chunk sentiment
+            score, label = self._analyze_sentence_sentiment(chunk)
+            
+            # Weight chunks after contrast markers more heavily
+            weight = 2.0 if is_contrast else 1.0
+            
+            # Slightly increase weight of negative sentiments (negativity bias)
+            if score < 0.4:
+                weight *= 1.2
+                
+            results.append({
+                'text': chunk,
+                'score': score,
+                'label': label,
+                'weight': weight,
+                'is_contrast': is_contrast
+            })
+            
+            weighted_sum += score * weight
+            total_weight += weight
+        
+        if not results:
+            return 0.5, []
+            
+        # Calculate weighted average score
+        final_score = weighted_sum / total_weight if total_weight > 0 else 0.5
+        
+        return final_score, results
+
+    def _analyze_sentiment_context(self, text: str) -> tuple[float, float, list]:
+        """
+        Analyze sentiment with context awareness and contrast handling.
+        
+        Returns:
+            tuple: (base_score, shift_ratio, sentiment_changes)
+                - base_score: Overall sentiment score (0-1)
+                - shift_ratio: Ratio of sentences with significant shifts
+                - sentiment_changes: List of (sentence, score, label, shift, weight)
+        """
+        # Split text into chunks at contrast markers
+        chunks = self._split_at_contrast_markers(text)
+        
+        # Analyze each chunk with proper weighting
+        base_score, chunk_analysis = self._summarize_sentiment_chunks(chunks)
+        
+        # Convert to sentiment changes format
+        sentiment_changes = []
+        shift_count = 0
+        prev_score = None
+        
+        for i, chunk in enumerate(chunk_analysis):
+            score = chunk['score']
+            shift = abs(score - prev_score) if prev_score is not None else 0.0
+            
+            # Check for significant shift
+            if prev_score is not None and shift > 0.3:
+                shift_count += 1
+                
+            sentiment_changes.append((
+                chunk['text'],
+                score,
+                chunk['label'],
+                shift,
+                chunk['weight']
+            ))
+            prev_score = score
+        
+        # Calculate shift ratio
+        shift_ratio = shift_count / len(chunk_analysis) if chunk_analysis else 0.0
+        
+        # If there are significant shifts, adjust final score
+        if shift_ratio > 0.3:
+            # Give more weight to negative chunks
+            negative_weight = sum(
+                (1 - chunk['score']) * chunk['weight'] 
+                for chunk in chunk_analysis 
+                if chunk['score'] < 0.4
+            )
+            positive_weight = sum(
+                chunk['score'] * chunk['weight'] 
+                for chunk in chunk_analysis 
+                if chunk['score'] > 0.6
+            )
+            
+            if negative_weight > positive_weight * 1.5:
+                base_score = min(base_score, 0.4)  # Cap at slightly negative
+            
+        return base_score, shift_ratio, sentiment_changes
+
     def _analyze_clause_sentiment(self, clause: str, aspect: str = None) -> Dict:
         """
-        Analyze sentiment of a single clause with enhanced negative sentiment detection.
+        Analyze sentiment of a single clause with enhanced context awareness and contrast handling.
         
         Args:
             clause: The text clause to analyze
             aspect: Optional aspect to focus the analysis on
             
         Returns:
-            Dictionary with sentiment analysis results including score, label, and confidence
+            Dictionary with sentiment analysis results including:
+            - score: Sentiment score (0-1)
+            - label: Sentiment label (positive/negative/neutral/mixed)
+            - confidence: Confidence in the prediction (0-1)
+            - aspects: If aspect is provided, aspect-specific sentiment
+            - sentiment_changes: Detailed sentiment analysis of chunks
         """
         try:
             if not clause.strip():
                 return {'score': 0.5, 'label': 'neutral', 'confidence': 0.0, 'text': ''}
             
-            # Preprocess and analyze the clause
-            doc = self.nlp(clause.lower().strip())
+            # Preprocess the clause
+            clause = clause.strip()
             
-            # Check for negation patterns
+            # If analyzing a specific aspect, add context
+            if aspect:
+                # Add aspect context to help the model focus
+                clause = f"When considering {aspect}, {clause}"
+            
+            # Sentiment analysis with context and contrast handling
+            base_score, shift_ratio, sentiment_changes = self._analyze_sentiment_context(clause)
+            
+            # Calculate confidence based on sentiment strength and consistency
+            confidence = 0.8  # Base confidence
+            
+            # Adjust confidence based on sentiment shifts
+            if shift_ratio > 0.3:  # High shift ratio indicates mixed sentiment
+                confidence *= (1.0 - (shift_ratio * 0.7))  # Reduce confidence for mixed sentiment
+                
+            # Adjust confidence based on sentiment strength
+            sentiment_strength = abs(base_score - 0.5) * 2  # 0-1, higher is stronger
+            confidence = max(0.1, min(0.95, confidence * (0.7 + (sentiment_strength * 0.3))))
+            
+            # Determine final label
+            if shift_ratio > 0.4 and len(sentiment_changes) > 1:
+                # If significant shifts, label as mixed sentiment
+                label = 'mixed'
+                # For mixed sentiment, move score towards neutral based on shift ratio
+                base_score = 0.5 + ((base_score - 0.5) * (1.0 - (shift_ratio * 0.7)))
+            elif base_score > 0.6:
+                label = 'positive'
+            elif base_score < 0.4:
+                label = 'negative'
+            else:
+                label = 'neutral'
+            
+            # Prepare result
+            result = {
+                'score': float(base_score),
+                'label': label,
+                'confidence': float(confidence),
+                'text': clause,
+                'sentiment_changes': [
+                    {
+                        'text': chunk[0],
+                        'score': float(chunk[1]),
+                        'label': chunk[2],
+                        'shift': float(chunk[3]),
+                        'weight': float(chunk[4]) if len(chunk) > 4 else 1.0
+                    }
+                    for chunk in sentiment_changes
+                ]
+            }
+            
+            # Add aspect-specific information if needed
+            if aspect:
+                result['aspect'] = aspect
+                result['aspect_score'] = base_score
+                
+            return result
             negation_terms = {'no', 'not', 'none', 'never', 'nothing', 'nowhere', 'neither', 'nor', 
-                             'barely', 'hardly', 'scarcely', 'rarely', 'seldom'}
+                             'barely', 'hardly', 'scarcely', 'rarely', 'seldom', 'without'}
+            
+            contrast_terms = {'but', 'however', 'although', 'though', 'yet', 'except', 'despite', 
+                            'whereas', 'while', 'nevertheless', 'nonetheless', 'on the other hand',
+                            'even though', 'in contrast', 'conversely'}
+            
+            intensifiers = {
+                'very': 0.2, 'really': 0.2, 'extremely': 0.25, 'absolutely': 0.25,
+                'completely': 0.3, 'totally': 0.25, 'utterly': 0.3, 'highly': 0.2,
+                'remarkably': 0.25, 'exceptionally': 0.3, 'incredibly': 0.25,
+                'especially': 0.2, 'particularly': 0.2, 'seriously': 0.15
+            }
+            
+            diminishers = {
+                'slightly': 0.15, 'somewhat': 0.15, 'a bit': 0.1, 'a little': 0.1,
+                'marginally': 0.15, 'moderately': 0.15, 'partially': 0.1,
+                'fairly': 0.1, 'quite': 0.1, 'rather': 0.1
+            }
+            
+            # Sarcasm indicators
+            sarcasm_indicators = {
+                'as if', 'yeah right', 'sure', 'of course', 'obviously', 'clearly',
+                'wow', 'oh great', 'just what i needed', 'perfect', 'wonderful'
+            }
+            
+            # Initialize sentiment modifiers
+            negation_boost = 1.0
+            contrast_boost = 1.0
+            intensity_modifier = 1.0
+            sarcasm_detected = False
+            
+            # Check for negation patterns in the clause
+            for token in doc:
+                # Handle negation
+                if token.text in negation_terms or any(dep == 'neg' for dep in [child.dep_ for child in token.children]):
+                    negation_boost *= -1
+                
+                # Handle intensifiers and diminishers
+                if token.text in intensifiers:
+                    intensity_modifier += intensifiers[token.text]
+                elif token.text in diminishers:
+                    intensity_modifier -= diminishers[token.text]
             
             # Check for contrastive conjunctions
-            contrast_terms = {'but', 'however', 'although', 'though', 'yet', 'except', 'despite', 
-                             'whereas', 'while', 'nevertheless', 'nonetheless'}
+            for sent in doc.sents:
+                sent_text = sent.text.lower()
+                if any(term in sent_text for term in contrast_terms):
+                    contrast_boost = 0.7  # Reduce confidence when contrast is present
             
-            # Check for intensifiers and diminishers
-            intensifiers = {'very', 'really', 'extremely', 'absolutely', 'completely', 'totally', 
-                           'utterly', 'highly', 'remarkably', 'exceptionally'}
-            diminishers = {'slightly', 'somewhat', 'a bit', 'a little', 'marginally', 'moderately'}
+            # Check for sarcasm
+            clause_lower = clause.lower()
+            sarcasm_detected = any(indicator in clause_lower for indicator in sarcasm_indicators)
             
-            # Analyze sentiment with the base model
+            # Adjust score based on modifiers
+            if sarcasm_detected:
+                base_score = 1.0 - base_score  # Invert sentiment for sarcasm
+            
+            # Apply intensity modifier (cap between 0.1 and 2.0)
+            intensity_modifier = max(0.1, min(2.0, intensity_modifier))
+            
+            # Apply negation and contrast
+            adjusted_score = base_score * negation_boost * contrast_boost * intensity_modifier
+            
+            # Ensure score is within 0-1 range
+            adjusted_score = max(0.0, min(1.0, adjusted_score))
+            
+            # Calculate confidence based on modifiers and shift ratio
+            confidence = 0.8  # Base confidence
+            if abs(adjusted_score - 0.5) < 0.1:  # If close to neutral
+                confidence *= 0.8
+            
+            # Reduce confidence for mixed sentiment
+            confidence *= (1.0 - (shift_ratio * 0.5))
+            
+            # Determine sentiment label
+            if sarcasm_detected:
+                label = 'sarcastic'
+            elif adjusted_score > 0.6:
+                label = 'positive'
+            elif adjusted_score < 0.4:
+                label = 'negative'
+            else:
+                label = 'neutral'
+            
+            # If analyzing a specific aspect
             if aspect:
                 # Check if aspect is mentioned in this clause
                 aspect_terms = aspect.lower().split()
